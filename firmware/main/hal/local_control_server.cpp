@@ -25,7 +25,7 @@ constexpr const char* TAG = "LocalControl";
 constexpr int kServerPort = 80;
 httpd_handle_t g_server = nullptr;
 std::mutex g_config_mutex;
-std::string g_janken_vision_url = "http://192.168.1.10:8000/janken";
+std::string g_janken_vision_url;
 
 constexpr const char kIndexHtml[] = R"HTML(<!doctype html>
 <html lang="en">
@@ -85,7 +85,7 @@ button.danger{background:var(--danger);color:#2a0808}.chip{display:inline-flex;p
 </section>
 <section class="wide">
 <h2>Janken</h2>
-<label>Vision URL <input id="jankenUrl" type="text" value="http://192.168.1.10:8000/janken"></label>
+<label>Vision URL <input id="jankenUrl" type="text" placeholder="http://192.168.1.10:8000/janken"></label>
 <div class="buttons"><button onclick="saveJanken()">Save</button></div>
 <p class="status">The JANKEN app sends camera photos to this local URL.</p>
 </section>
@@ -104,7 +104,7 @@ function sendFace(){send({emotion:$('emotion').value,speech:$('speech').value})}
 function clearSpeech(){send({speech:''});$('speech').value=''}
 function reboot(){if(confirm('Reboot StackChan?'))send({reboot:true})}
 function refresh(){fetch('/api/status').then(r=>r.json()).then(update)}
-function update(s){if(s.yaw!==undefined){$('yaw').value=$('yawNum').value=s.yaw;$('pitch').value=$('pitchNum').value=s.pitch}if(s.jankenVisionUrl)$('jankenUrl').value=s.jankenVisionUrl;$('info').textContent=`IP: ${s.ip||location.hostname}  Battery: ${s.battery}%  Charging: ${s.charging?'yes':'no'}`}
+function update(s){if(s.yaw!==undefined){$('yaw').value=$('yawNum').value=s.yaw;$('pitch').value=$('pitchNum').value=s.pitch}if(s.jankenVisionUrl!==undefined)$('jankenUrl').value=s.jankenVisionUrl;$('info').textContent=`IP: ${s.ip||location.hostname}  Battery: ${s.battery}%  Charging: ${s.charging?'yes':'no'}`}
 function sendLlm(){const reply=$('llmReply');reply.textContent='Thinking...';fetch('/api/llm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('llmUrl').value,model:$('llmModel').value,prompt:$('llmPrompt').value})}).then(r=>r.json()).then(s=>{reply.textContent=s.ok?s.reply:`Error: ${s.error||'failed'}`}).catch(e=>reply.textContent=`Error: ${e.message}`)}
 function sayReply(){const t=$('llmReply').textContent;if(t&&!t.startsWith('Error:'))send({speech:t})}
 function saveJanken(){send({jankenVisionUrl:$('jankenUrl').value})}
