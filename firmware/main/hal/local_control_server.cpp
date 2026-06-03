@@ -15,6 +15,7 @@
 #include <cstring>
 #include <string>
 #include <algorithm>
+#include <mutex>
 
 using stackchan::avatar::Emotion;
 
@@ -23,6 +24,8 @@ namespace {
 constexpr const char* TAG = "LocalControl";
 constexpr int kServerPort = 80;
 httpd_handle_t g_server = nullptr;
+std::mutex g_config_mutex;
+std::string g_janken_vision_url = "http://192.168.1.10:8000/janken";
 
 constexpr const char kIndexHtml[] = R"HTML(<!doctype html>
 <html lang="en">
@@ -80,6 +83,12 @@ button.danger{background:var(--danger);color:#2a0808}.chip{display:inline-flex;p
 <div class="buttons"><button onclick="sendLlm()">Ask</button><button class="secondary" onclick="sayReply()">Say Again</button></div>
 <p id="llmReply" class="reply">Local LLM reply will appear here.</p>
 </section>
+<section class="wide">
+<h2>Janken</h2>
+<label>Vision URL <input id="jankenUrl" type="text" value="http://192.168.1.10:8000/janken"></label>
+<div class="buttons"><button onclick="saveJanken()">Save</button></div>
+<p class="status">The JANKEN app sends camera photos to this local URL.</p>
+</section>
 </div>
 </main>
 <script>
@@ -95,9 +104,10 @@ function sendFace(){send({emotion:$('emotion').value,speech:$('speech').value})}
 function clearSpeech(){send({speech:''});$('speech').value=''}
 function reboot(){if(confirm('Reboot StackChan?'))send({reboot:true})}
 function refresh(){fetch('/api/status').then(r=>r.json()).then(update)}
-function update(s){if(s.yaw!==undefined){$('yaw').value=$('yawNum').value=s.yaw;$('pitch').value=$('pitchNum').value=s.pitch}$('info').textContent=`IP: ${s.ip||location.hostname}  Battery: ${s.battery}%  Charging: ${s.charging?'yes':'no'}`}
+function update(s){if(s.yaw!==undefined){$('yaw').value=$('yawNum').value=s.yaw;$('pitch').value=$('pitchNum').value=s.pitch}if(s.jankenVisionUrl)$('jankenUrl').value=s.jankenVisionUrl;$('info').textContent=`IP: ${s.ip||location.hostname}  Battery: ${s.battery}%  Charging: ${s.charging?'yes':'no'}`}
 function sendLlm(){const reply=$('llmReply');reply.textContent='Thinking...';fetch('/api/llm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('llmUrl').value,model:$('llmModel').value,prompt:$('llmPrompt').value})}).then(r=>r.json()).then(s=>{reply.textContent=s.ok?s.reply:`Error: ${s.error||'failed'}`}).catch(e=>reply.textContent=`Error: ${e.message}`)}
 function sayReply(){const t=$('llmReply').textContent;if(t&&!t.startsWith('Error:'))send({speech:t})}
+function saveJanken(){send({jankenVisionUrl:$('jankenUrl').value})}
 refresh();
 </script>
 </body>
@@ -229,6 +239,7 @@ std::string make_status_json()
     cJSON_AddNumberToObject(json, "battery", GetHAL().getBatteryLevel());
     cJSON_AddBoolToObject(json, "charging", GetHAL().isBatteryCharging());
     cJSON_AddStringToObject(json, "emotion", emotion);
+    cJSON_AddStringToObject(json, "jankenVisionUrl", local_control::get_janken_vision_url().c_str());
     std::string status = json_to_string(json);
     cJSON_Delete(json);
     return status;
@@ -242,6 +253,10 @@ bool apply_control_json(cJSON* root, std::string& error)
     }
 
     bool should_reboot = get_json_bool(root, "reboot", false);
+    cJSON* janken_url_item = cJSON_GetObjectItem(root, "jankenVisionUrl");
+    if (cJSON_IsString(janken_url_item)) {
+        local_control::set_janken_vision_url(janken_url_item->valuestring);
+    }
 
     {
         LvglLockGuard lock;
@@ -580,6 +595,18 @@ std::string get_url()
         return "";
     }
     return std::string("http://") + ip + "/";
+}
+
+std::string get_janken_vision_url()
+{
+    std::lock_guard<std::mutex> lock(g_config_mutex);
+    return g_janken_vision_url;
+}
+
+void set_janken_vision_url(const std::string& url)
+{
+    std::lock_guard<std::mutex> lock(g_config_mutex);
+    g_janken_vision_url = url;
 }
 
 }  // namespace local_control
