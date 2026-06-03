@@ -16,6 +16,7 @@
 #include <sys/time.h>
 #include <esp_sntp.h>
 #include <atomic>
+#include "local_control_server.h"
 
 static std::string _tag           = "Network";
 static bool _is_network_connected = false;
@@ -48,6 +49,7 @@ void Hal::startNetwork(std::function<void(std::string_view)> onLog)
 {
     if (_is_network_connected) {
         mclog::tagInfo(_tag, "network already connected");
+        startLocalControlServer(onLog);
         return;
     }
 
@@ -115,8 +117,27 @@ void Hal::startNetwork(std::function<void(std::string_view)> onLog)
     board.SetNetworkEventCallback(nullptr);
 
     startSntp();
+    startLocalControlServer(onLog);
 
     _is_network_connected = true;
+}
+
+void Hal::startLocalControlServer(std::function<void(std::string_view)> onLog)
+{
+    if (local_control::start()) {
+        auto url = local_control::get_url();
+        mclog::tagInfo(_tag, "local control server: {}", url);
+        if (onLog && !url.empty()) {
+            onLog(fmt::format("Local control:\n{}", url));
+        }
+    } else if (onLog) {
+        onLog("Local control server failed");
+    }
+}
+
+std::string Hal::getLocalControlUrl()
+{
+    return local_control::get_url();
 }
 
 WifiStatus Hal::getWifiStatus()
