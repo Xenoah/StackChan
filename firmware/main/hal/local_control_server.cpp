@@ -8,6 +8,7 @@
 #include <stackchan/stackchan.h>
 #include <stackchan/avatar/avatar/elements/emotion.h>
 #include <cJSON.h>
+#include <esp_http_client.h>
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_netif.h>
@@ -36,7 +37,8 @@ main{width:min(760px,100%);margin:0 auto;padding:18px}.top{display:flex;align-it
 h1{font-size:22px;margin:0}.status{color:var(--muted);font-size:13px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}h2{font-size:15px;margin:0 0 12px}
 label{display:grid;gap:6px;margin:10px 0;color:var(--muted)}input,select,button{font:inherit}
-input[type=range]{width:100%}input[type=text],input[type=number],select{width:100%;background:#0d1112;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:9px}
+input[type=range]{width:100%}input[type=text],input[type=number],select,textarea{width:100%;background:#0d1112;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:9px}
+textarea{min-height:74px;resize:vertical}.wide{grid-column:1/-1}.reply{white-space:pre-wrap;background:#0d1112;border:1px solid var(--line);border-radius:6px;padding:10px;min-height:44px}
 .row{display:grid;grid-template-columns:1fr 74px;gap:10px;align-items:center}.buttons{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 button{border:0;border-radius:6px;background:var(--accent);color:#062018;font-weight:700;padding:9px 12px;cursor:pointer}button.secondary{background:#303a3d;color:var(--text)}
 button.danger{background:var(--danger);color:#2a0808}.chip{display:inline-flex;padding:4px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted)}
@@ -70,6 +72,14 @@ button.danger{background:var(--danger);color:#2a0808}.chip{display:inline-flex;p
 <p id="info" class="status">Loading...</p>
 <div class="buttons"><button class="secondary" onclick="refresh()">Refresh</button><button class="danger" onclick="reboot()">Reboot</button></div>
 </section>
+<section class="wide">
+<h2>Local LLM</h2>
+<label>Ollama URL <input id="llmUrl" type="text" value="http://192.168.1.10:11434"></label>
+<label>Model <input id="llmModel" type="text" value="qwen2.5:7b"></label>
+<label>Message <textarea id="llmPrompt" maxlength="600" placeholder="Type a Japanese message"></textarea></label>
+<div class="buttons"><button onclick="sendLlm()">Ask</button><button class="secondary" onclick="sayReply()">Say Again</button></div>
+<p id="llmReply" class="reply">Local LLM reply will appear here.</p>
+</section>
 </div>
 </main>
 <script>
@@ -86,6 +96,8 @@ function clearSpeech(){send({speech:''});$('speech').value=''}
 function reboot(){if(confirm('Reboot StackChan?'))send({reboot:true})}
 function refresh(){fetch('/api/status').then(r=>r.json()).then(update)}
 function update(s){if(s.yaw!==undefined){$('yaw').value=$('yawNum').value=s.yaw;$('pitch').value=$('pitchNum').value=s.pitch}$('info').textContent=`IP: ${s.ip||location.hostname}  Battery: ${s.battery}%  Charging: ${s.charging?'yes':'no'}`}
+function sendLlm(){const reply=$('llmReply');reply.textContent='Thinking...';fetch('/api/llm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('llmUrl').value,model:$('llmModel').value,prompt:$('llmPrompt').value})}).then(r=>r.json()).then(s=>{reply.textContent=s.ok?s.reply:`Error: ${s.error||'failed'}`}).catch(e=>reply.textContent=`Error: ${e.message}`)}
+function sayReply(){const t=$('llmReply').textContent;if(t&&!t.startsWith('Error:'))send({speech:t})}
 refresh();
 </script>
 </body>
@@ -124,6 +136,37 @@ std::string json_to_string(cJSON* json)
     std::string result = printed;
     cJSON_free(printed);
     return result;
+}
+
+std::string read_request_body(httpd_req_t* req, size_t max_size, std::string& error)
+{
+    if (req->content_len <= 0 || req->content_len > max_size) {
+        error = "invalid body size";
+        return "";
+    }
+
+    std::string body;
+    body.resize(req->content_len);
+    int received = 0;
+    while (received < req->content_len) {
+        int ret = httpd_req_recv(req, body.data() + received, req->content_len - received);
+        if (ret <= 0) {
+            error = "failed to read body";
+            return "";
+        }
+        received += ret;
+    }
+    return body;
+}
+
+std::string json_response(bool ok, const char* key, const std::string& value)
+{
+    cJSON* json = cJSON_CreateObject();
+    cJSON_AddBoolToObject(json, "ok", ok);
+    cJSON_AddStringToObject(json, key, value.c_str());
+    std::string response = json_to_string(json);
+    cJSON_Delete(json);
+    return response;
 }
 
 const char* emotion_to_string(Emotion emotion)
@@ -258,6 +301,123 @@ bool apply_control_json(cJSON* root, std::string& error)
     return true;
 }
 
+std::string normalize_llm_url(std::string url)
+{
+    while (!url.empty() && url.back() == '/') {
+        url.pop_back();
+    }
+    if (url.find("/api/chat") != std::string::npos || url.find("/api/generate") != std::string::npos) {
+        return url;
+    }
+    return url + "/api/chat";
+}
+
+std::string make_ollama_chat_payload(const std::string& model, const std::string& prompt)
+{
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "model", model.c_str());
+    cJSON_AddBoolToObject(root, "stream", false);
+
+    cJSON* messages = cJSON_CreateArray();
+    cJSON* system = cJSON_CreateObject();
+    cJSON_AddStringToObject(system, "role", "system");
+    cJSON_AddStringToObject(system, "content",
+                            "You are StackChan. Reply in Japanese, briefly and warmly.");
+    cJSON_AddItemToArray(messages, system);
+
+    cJSON* user = cJSON_CreateObject();
+    cJSON_AddStringToObject(user, "role", "user");
+    cJSON_AddStringToObject(user, "content", prompt.c_str());
+    cJSON_AddItemToArray(messages, user);
+
+    cJSON_AddItemToObject(root, "messages", messages);
+    std::string payload = json_to_string(root);
+    cJSON_Delete(root);
+    return payload;
+}
+
+bool extract_llm_reply(const std::string& response, std::string& reply, std::string& error)
+{
+    cJSON* root = cJSON_ParseWithLength(response.data(), response.size());
+    if (root == nullptr) {
+        error = "invalid llm response";
+        return false;
+    }
+
+    cJSON* message = cJSON_GetObjectItem(root, "message");
+    cJSON* content = message != nullptr ? cJSON_GetObjectItem(message, "content") : nullptr;
+    if (cJSON_IsString(content)) {
+        reply = content->valuestring;
+        cJSON_Delete(root);
+        return true;
+    }
+
+    cJSON* generated = cJSON_GetObjectItem(root, "response");
+    if (cJSON_IsString(generated)) {
+        reply = generated->valuestring;
+        cJSON_Delete(root);
+        return true;
+    }
+
+    cJSON* err = cJSON_GetObjectItem(root, "error");
+    error = cJSON_IsString(err) ? err->valuestring : "missing reply";
+    cJSON_Delete(root);
+    return false;
+}
+
+bool call_local_llm(const std::string& url, const std::string& model, const std::string& prompt, std::string& reply,
+                    std::string& error)
+{
+    if (url.empty() || model.empty() || prompt.empty()) {
+        error = "url, model, and prompt are required";
+        return false;
+    }
+
+    auto endpoint = normalize_llm_url(url);
+    auto payload = make_ollama_chat_payload(model, prompt);
+
+    esp_http_client_config_t config = {};
+    config.url = endpoint.c_str();
+    config.timeout_ms = 60000;
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == nullptr) {
+        error = "failed to create llm client";
+        return false;
+    }
+
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, payload.c_str(), payload.size());
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK) {
+        error = esp_err_to_name(err);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+
+    int status = esp_http_client_get_status_code(client);
+    if (status < 200 || status >= 300) {
+        char status_buffer[32];
+        snprintf(status_buffer, sizeof(status_buffer), "llm http status %d", status);
+        error = status_buffer;
+        esp_http_client_cleanup(client);
+        return false;
+    }
+
+    std::string response;
+    response.resize(8192);
+    int read_len = esp_http_client_read_response(client, response.data(), response.size() - 1);
+    esp_http_client_cleanup(client);
+    if (read_len <= 0) {
+        error = "empty llm response";
+        return false;
+    }
+    response.resize(read_len);
+
+    return extract_llm_reply(response, reply, error);
+}
+
 esp_err_t send_text(httpd_req_t* req, const char* type, const char* body)
 {
     httpd_resp_set_type(req, type);
@@ -279,25 +439,14 @@ esp_err_t status_handler(httpd_req_t* req)
 
 esp_err_t control_handler(httpd_req_t* req)
 {
-    if (req->content_len <= 0 || req->content_len > 2048) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid body size");
+    std::string error;
+    std::string body = read_request_body(req, 2048, error);
+    if (!error.empty()) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, error.c_str());
         return ESP_FAIL;
     }
 
-    std::string body;
-    body.resize(req->content_len);
-    int received = 0;
-    while (received < req->content_len) {
-        int ret = httpd_req_recv(req, body.data() + received, req->content_len - received);
-        if (ret <= 0) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "failed to read body");
-            return ESP_FAIL;
-        }
-        received += ret;
-    }
-
     cJSON* root = cJSON_ParseWithLength(body.data(), body.size());
-    std::string error;
     bool ok = apply_control_json(root, error);
     cJSON_Delete(root);
 
@@ -312,6 +461,48 @@ esp_err_t control_handler(httpd_req_t* req)
 
     auto status = make_status_json();
     return send_text(req, "application/json", status.c_str());
+}
+
+esp_err_t llm_handler(httpd_req_t* req)
+{
+    std::string error;
+    std::string body = read_request_body(req, 2048, error);
+    if (!error.empty()) {
+        std::string response = json_response(false, "error", error);
+        return send_text(req, "application/json", response.c_str());
+    }
+
+    cJSON* root = cJSON_ParseWithLength(body.data(), body.size());
+    if (root == nullptr) {
+        std::string response = json_response(false, "error", "invalid json");
+        return send_text(req, "application/json", response.c_str());
+    }
+
+    cJSON* url_item = cJSON_GetObjectItem(root, "url");
+    cJSON* model_item = cJSON_GetObjectItem(root, "model");
+    cJSON* prompt_item = cJSON_GetObjectItem(root, "prompt");
+    std::string url = cJSON_IsString(url_item) ? url_item->valuestring : "";
+    std::string model = cJSON_IsString(model_item) ? model_item->valuestring : "";
+    std::string prompt = cJSON_IsString(prompt_item) ? prompt_item->valuestring : "";
+    cJSON_Delete(root);
+
+    std::string reply;
+    bool ok = call_local_llm(url, model, prompt, reply, error);
+    if (!ok) {
+        std::string response = json_response(false, "error", error);
+        return send_text(req, "application/json", response.c_str());
+    }
+
+    {
+        LvglLockGuard lock;
+        if (GetStackChan().hasAvatar()) {
+            GetStackChan().avatar().setSpeech(reply);
+            GetStackChan().avatar().setEmotion(Emotion::Happy);
+        }
+    }
+
+    std::string response = json_response(true, "reply", reply);
+    return send_text(req, "application/json", response.c_str());
 }
 
 }  // namespace
@@ -354,9 +545,16 @@ bool start()
         .handler = control_handler,
         .user_ctx = nullptr,
     };
+    httpd_uri_t llm_uri = {
+        .uri = "/api/llm",
+        .method = HTTP_POST,
+        .handler = llm_handler,
+        .user_ctx = nullptr,
+    };
     httpd_register_uri_handler(g_server, &index_uri);
     httpd_register_uri_handler(g_server, &status_uri);
     httpd_register_uri_handler(g_server, &control_uri);
+    httpd_register_uri_handler(g_server, &llm_uri);
 
     ESP_LOGI(TAG, "started at %s", get_url().c_str());
     return true;
