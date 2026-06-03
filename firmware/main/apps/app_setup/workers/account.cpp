@@ -6,7 +6,6 @@
 #include "workers.h"
 #include <hal/hal.h>
 #include <mooncake_log.h>
-#include <apps/common/loading_page/loading_page.h>
 
 using namespace uitk::lvgl_cpp;
 using namespace setup_workers;
@@ -56,9 +55,9 @@ AccountWorker::PageAccount::PageAccount(std::string_view username, std::string_v
     _label_title->setTextFont(&lv_font_montserrat_20);
     _label_title->setTextColor(lv_color_hex(0x7E7B9C));
     _label_title->align(LV_ALIGN_TOP_MID, 0, 12);
-    _label_title->setText("ACCOUNT");
+    _label_title->setText("LOCAL MODE");
 
-    _panel_username    = std::make_unique<PanelInfo>(_panel->get(), 50, "M5Stack Account:", username);
+    _panel_username    = std::make_unique<PanelInfo>(_panel->get(), 50, "Mode:", username);
     _panel_device_name = std::make_unique<PanelInfo>(_panel->get(), 174, "Device Name:", deviceName);
 
     // Button
@@ -67,7 +66,7 @@ AccountWorker::PageAccount::PageAccount(std::string_view username, std::string_v
     _btn_unbind->align(LV_ALIGN_TOP_MID, 0, 303);
     _btn_unbind->setSize(290, 48);
     _btn_unbind->setBgColor(lv_color_hex(0xFF8080));
-    _btn_unbind->label().setText("Unbind and factory reset");
+    _btn_unbind->label().setText("Factory reset");
     _btn_unbind->label().setTextFont(&lv_font_montserrat_20);
     _btn_unbind->label().setTextColor(lv_color_hex(0x731F1F));
     _btn_unbind->onClick().connect([this]() { _is_unbind_clicked = true; });
@@ -83,30 +82,6 @@ AccountWorker::PageAccount::PageAccount(std::string_view username, std::string_v
 
 AccountWorker::AccountWorker()
 {
-    // Update account info
-    {
-        auto loading_page = std::make_unique<view::LoadingPage>(0xF6F6F6, 0x26206A);
-        GetHAL().lvglUnlock();
-
-        // Start network
-        GetHAL().startNetwork([&](std::string_view msg) {
-            LvglLockGuard lock;
-            loading_page->setMessage(msg);
-        });
-
-        // Update info
-        bool result = GetHAL().updateAccountInfo([&](std::string_view msg) {
-            LvglLockGuard lock;
-            loading_page->setMessage(msg);
-        });
-
-        if (!result) {
-            GetHAL().delay(5000);
-        }
-
-        GetHAL().lvglLock();
-    }
-
     auto info     = GetHAL().getUserAccountInfo();
     _page_account = std::make_unique<PageAccount>(info.username, info.deviceName);
 }
@@ -123,19 +98,7 @@ void AccountWorker::update()
             _page_account.reset();
 
             _worker_reset = std::make_unique<FactoryResetWorker>([]() {
-                auto loading_page = std::make_unique<view::LoadingPage>(0xF6F6F6, 0x26206A);
-                GetHAL().lvglUnlock();
-
-                bool result = GetHAL().unbindAccount([&](std::string_view msg) {
-                    LvglLockGuard lock;
-                    loading_page->setMessage(msg);
-                });
-
-                if (!result) {
-                    GetHAL().delay(5000);
-                }
-
-                GetHAL().lvglLock();
+                GetHAL().unbindAccount([](std::string_view) {});
             });
         } else if (_page_account->isQuitClicked()) {
             mclog::tagInfo(_tag, "quit clicked");

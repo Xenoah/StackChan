@@ -9,6 +9,8 @@
 #include <mooncake.h>
 #include <apps/apps.h>
 #include <hal/hal.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
@@ -21,6 +23,15 @@ extern "C" void app_main(void)
 
     // HAL init
     GetHAL().init();
+
+    xTaskCreate(
+        [](void*) {
+            if (GetHAL().isAppConfiged()) {
+                GetHAL().startNetwork(nullptr, false);
+            }
+            vTaskDelete(nullptr);
+        },
+        "local_control_net", 8192, nullptr, 2, nullptr);
 
     // Setup ui hal
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });

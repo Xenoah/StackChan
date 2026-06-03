@@ -104,8 +104,8 @@ void AppSetup::onOpen()
               }}},
         },
         {
-            "Account",
-            {{"Unbind & Reset",
+            "Local Mode",
+            {{"Factory Reset",
               [&]() {
                   _destroy_menu    = true;
                   _need_warm_reset = true;

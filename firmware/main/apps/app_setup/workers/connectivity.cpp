@@ -11,6 +11,7 @@
 #include <mooncake_log.h>
 #include <hal/hal.h>
 #include <memory>
+#include <apps/common/loading_page/loading_page.h>
 
 using namespace smooth_ui_toolkit::lvgl_cpp;
 using namespace setup_workers;
@@ -20,7 +21,7 @@ static std::string _tag = "Setup-Connectivity";
 
 WifiSetupWorker::WifiSetupWorker()
 {
-    _state       = State::AppDownload;
+    _state       = State::Done;
     _last_state  = State::None;
     _is_first_in = true;
 
@@ -31,6 +32,17 @@ WifiSetupWorker::WifiSetupWorker()
     avatar->rightEye().setVisible(false);
     avatar->mouth().setVisible(false);
     GetStackChan().attachAvatar(std::move(avatar));
+
+    auto loading_page = std::make_unique<view::LoadingPage>(0xEDF4FF, 0x26206A);
+    loading_page->setMessage("Starting local WiFi setup...");
+    GetHAL().lvglUnlock();
+
+    GetHAL().startNetwork([&](std::string_view msg) {
+        LvglLockGuard lock;
+        loading_page->setMessage(msg);
+    }, false);
+
+    GetHAL().lvglLock();
 }
 
 WifiSetupWorker::~WifiSetupWorker()
@@ -65,16 +77,16 @@ void WifiSetupWorker::update_state()
                 data.title->setTextFont(&lv_font_montserrat_20);
                 data.title->setTextColor(lv_color_hex(0x7E7B9C));
                 data.title->align(LV_ALIGN_TOP_MID, 0, 0);
-                data.title->setText("APP SETUP");
+                data.title->setText("LOCAL SETUP");
 
                 data.info = std::make_unique<Label>(lv_screen_active());
                 data.info->setTextFont(&lv_font_montserrat_14);
                 data.info->setTextColor(lv_color_hex(0x26206A));
                 data.info->align(LV_ALIGN_TOP_MID, 0, 27);
                 data.info->setTextAlign(LV_TEXT_ALIGN_CENTER);
-                data.info->setText("Install \"StackChan World\" app\nand login to your M5Stack account");
+                data.info->setText("No account login required.\nUse a local browser after WiFi setup.");
 
-                std::string qrcode_text = "https://apps.apple.com/us/app/stackchan-world/id6756086326";
+                std::string qrcode_text = "http://<stackchan-ip>/";
                 data.qrcode_ios         = std::make_unique<Qrcode>(lv_screen_active());
                 data.qrcode_ios->setSize(80);
                 data.qrcode_ios->setDarkColor(lv_color_hex(0x221C5B));
@@ -82,7 +94,7 @@ void WifiSetupWorker::update_state()
                 data.qrcode_ios->update(qrcode_text);
                 data.qrcode_ios->align(LV_ALIGN_CENTER, -65, -12);
 
-                qrcode_text         = "https://play.google.com/store/apps/details?id=com.m5stack.stackchan";
+                qrcode_text         = "http://<stackchan-ip>/api/status";
                 data.qrcode_android = std::make_unique<Qrcode>(lv_screen_active());
                 data.qrcode_android->setSize(80);
                 data.qrcode_android->setDarkColor(lv_color_hex(0x221C5B));
@@ -94,14 +106,14 @@ void WifiSetupWorker::update_state()
                 data.label_ios->setTextFont(&lv_font_montserrat_14);
                 data.label_ios->setTextColor(lv_color_hex(0x26206A));
                 data.label_ios->align(LV_ALIGN_CENTER, -65, 47);
-                data.label_ios->setText("App Store\n(iOS)");
+                data.label_ios->setText("Control UI\nhttp://IP/");
                 data.label_ios->setTextAlign(LV_TEXT_ALIGN_CENTER);
 
                 data.label_android = std::make_unique<Label>(lv_screen_active());
                 data.label_android->setTextFont(&lv_font_montserrat_14);
                 data.label_android->setTextColor(lv_color_hex(0x26206A));
                 data.label_android->align(LV_ALIGN_CENTER, 65, 47);
-                data.label_android->setText("Play Store\n(Android)");
+                data.label_android->setText("Status API\n/api/status");
                 data.label_android->setTextAlign(LV_TEXT_ALIGN_CENTER);
 
                 data.btn_next = std::make_unique<Button>(lv_screen_active());
@@ -174,7 +186,7 @@ void WifiSetupWorker::update_state()
                 data.info->setTextColor(lv_color_hex(0x26206A));
                 data.info->align(LV_ALIGN_BOTTOM_MID, 0, -26);
                 data.info->setTextAlign(LV_TEXT_ALIGN_CENTER);
-                data.info->setText("Look for me in the app\nto start setup.");
+                data.info->setText("Use WiFi config page\nto start setup.");
 
                 auto& avatar = GetStackChan().avatar();
                 avatar.clearDecorators();

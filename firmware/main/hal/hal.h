@@ -273,7 +273,7 @@ public:
     void clearWarmRebootRequest();
 
     /* --------------------------------- Network -------------------------------- */
-    void startNetwork(std::function<void(std::string_view)> onLog);
+    void startNetwork(std::function<void(std::string_view)> onLog, bool syncTime = true);
     WifiStatus getWifiStatus();
     void startSntp();
     void startLocalControlServer(std::function<void(std::string_view)> onLog = nullptr);

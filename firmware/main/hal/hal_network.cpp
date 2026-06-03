@@ -16,10 +16,12 @@
 #include <sys/time.h>
 #include <esp_sntp.h>
 #include <atomic>
+#include <settings.h>
 #include "local_control_server.h"
 
 static std::string _tag           = "Network";
 static bool _is_network_connected = false;
+static std::atomic<bool> _is_network_starting = false;
 
 static void time_sync_notification_cb(struct timeval* tv)
 {
@@ -45,10 +47,22 @@ void Hal::startSntp()
     }
 }
 
-void Hal::startNetwork(std::function<void(std::string_view)> onLog)
+void Hal::startNetwork(std::function<void(std::string_view)> onLog, bool syncTime)
 {
     if (_is_network_connected) {
         mclog::tagInfo(_tag, "network already connected");
+        startLocalControlServer(onLog);
+        return;
+    }
+
+    if (_is_network_starting.exchange(true)) {
+        mclog::tagInfo(_tag, "network already starting");
+        if (onLog) {
+            onLog("WiFi connecting...");
+        }
+        while (!_is_network_connected) {
+            GetHAL().delay(500);
+        }
         startLocalControlServer(onLog);
         return;
     }
@@ -116,10 +130,16 @@ void Hal::startNetwork(std::function<void(std::string_view)> onLog)
     mclog::tagInfo(_tag, "network connected");
     board.SetNetworkEventCallback(nullptr);
 
-    startSntp();
+    if (syncTime) {
+        startSntp();
+    }
     startLocalControlServer(onLog);
 
+    Settings settings("app_config", true);
+    settings.SetBool("is_configed", true);
+
     _is_network_connected = true;
+    _is_network_starting  = false;
 }
 
 void Hal::startLocalControlServer(std::function<void(std::string_view)> onLog)
